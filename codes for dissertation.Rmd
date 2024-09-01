@@ -1,0 +1,1499 @@
+---
+title: 'Calibration Methods'
+author: "11375859"
+date: "2024-08-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+```
+
+packages
+```{r}
+library(corrplot)
+library(readr)
+library(car)
+library(survival)
+library(rms)
+library(gtsummary)
+library(ggplot2)
+library(survminer)
+library(survminer)
+library(knitr)
+library(kableExtra)
+library(riskRegression)
+library(boot)
+library(stats)
+library(splines)
+library(broom)
+library(dplyr)
+
+```
+
+
+data pre-processing
+```{r}
+
+frmgham2 <- read_csv("E:/资料/111AAA111UoM Master/毕业论文/数据库/csv/frmgham2.csv")
+View(frmgham2)
+f2 <- frmgham2[, c("SEX", "AGE", "SYSBP", "DIABP", "BPMEDS", "CURSMOKE", 
+                   "CIGPDAY", "TOTCHOL", "BMI", "GLUCOSE", "DIABETES", 
+                   "HYPERTEN", "CVD", "TIMECVD")]
+M<- cor(f2)
+corrplot(M, method = "color", type = "upper", tl.col = "black", tl.srt = 45, tl.cex = 0.8, 
+         number.cex = 0.6, addCoef.col = "black", diag = FALSE, 
+         col = colorRampPalette(c("purple", "white", "orange"))(200))
+```
+
+
+```{r}
+ff <- frmgham2[, c("SEX", "AGE", "SYSBP", "DIABETES" , 
+                   "HYPERTEN", "CVD", "TIMECVD")]
+
+M<- cor(ff)
+corrplot(M, method = "color", type = "upper", tl.col = "black", tl.srt = 45, tl.cex = 0.8,
+         number.cex = 0.6, addCoef.col = "black", diag = FALSE,
+         col = colorRampPalette(c("purple", "white", "orange"))(200))
+table(is.na(ff)==FALSE)
+```
+
+
+
+
+```{r}
+
+hist(ff$AGE, main="Histogram of AGE", xlab="AGE", breaks=30)
+qqnorm(ff$AGE)
+qqline(ff$AGE, col = "red")
+
+hist(ff$SYSBP, main="Histogram of SYSBP", xlab="SYSBP", breaks=30)
+qqnorm(ff$SYSBP)
+qqline(ff$SYSBP, col = "blue")
+
+
+
+ff$event <- as.numeric(ff$CVD == 1) 
+ff$time_years <- ff$TIMECVD / 365.25 
+summary(ff$time_years)
+
+fc1<- ff[, c("SEX", "AGE", "SYSBP",  "DIABETES", 
+             "HYPERTEN", "event", "time_years")]
+
+```
+
+
+
+```{r}
+cox_model <- coxph(Surv(time_years, event) ~ SEX + AGE + 
+                     SYSBP + DIABETES + HYPERTEN , data = fc1)
+vif(cox_model)
+```
+
+```{r}
+boxplot(AGE ~ DIABETES, data = fc1, main = "Boxplot by Group",
+        xlab = "DIABETES", ylab = "AGE")
+boxplot(AGE ~ HYPERTEN, data = fc1, main = "Boxplot by Group",
+        xlab = "HYPERTEN", ylab = "AGE")
+boxplot(AGE ~ SEX, data = fc1, main = "Boxplot by Group",
+        xlab = "SEX", ylab = "AGE")
+```
+
+
+Secondary investigation - check non-linearity of continuous predictors
+```{r}
+dd <- datadist(fc1)
+options(datadist = "dd")
+fit_age <- cph(Surv(time_years, event) ~ AGE, data = fc1, x = TRUE, y = TRUE, surv = TRUE)
+fit_sysbp <- cph(Surv(time_years, event) ~ SYSBP, data = fc1, x = TRUE, y = TRUE, surv = TRUE)
+
+
+oldpar <- par(mfrow = c(2,2), mar = c(5, 5, 1, 1))
+plot(rms::Predict(fit_age),main = "Effect of AGE on Survival")
+plot(rms::Predict(fit_sysbp), main = "Effect of SYSBP on Survival")
+
+options(datadist = NULL)
+par(oldpar)
+
+```
+
+
+EDA
+```{r}
+gtsummary::tbl_summary(fc1)
+```
+
+
+
+
+survival plots
+```{r}
+
+sfit <- survfit(Surv(time_years, event == 1) ~ 1,
+data = fc1) # survival
+sfit_c <- survfit(Surv(time_years, event == 0) ~ 1,
+data = fc1) # censoring
+
+
+dev_plots <- list()
+
+km_plot <- survminer::ggsurvplot(
+  sfit,  
+  data = fc1,
+  risk.table = TRUE,
+  risk.table.fontsize = 3.6,
+  palette = 3,
+  size = 1.5,
+  censor = FALSE,
+  legend = "none",
+  title = "Failure-free survival",
+  xlab = "Years",
+  ylab = "Probability"
+)
+
+
+km_plot$plot <- km_plot$plot + theme_minimal() + 
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  )
+
+
+dev_plots[[1]] <- km_plot
+
+
+censoring_plot <- survminer::ggsurvplot(
+  sfit_c,  
+  data = fc1,
+  risk.table = TRUE,
+  risk.table.fontsize = 3.6,
+  palette = 2,
+  size = 1.5,
+  censor = TRUE,  
+  legend = "none",
+  title = "Censoring",
+  xlab = "Years",
+  ylab = "Probability"
+)
+
+
+censoring_plot$plot <- censoring_plot$plot + theme_minimal() + 
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  )
+
+
+dev_plots[[2]] <- censoring_plot
+
+
+combined_plots <- survminer::arrange_ggsurvplots(
+  list(dev_plots[[1]], dev_plots[[2]]),
+  print = TRUE,
+  ncol = 2,
+  nrow = 1,
+  risk.table.height = 0.15,
+  title = "CVD"
+)
+
+
+print(combined_plots)
+
+
+```
+
+
+
+check assumption
+the proportional hazard (PH) assumption
+```{r}
+fit1_ph <- coxph(Surv(time_years, event) ~ AGE + SYSBP  + SEX + DIABETES + HYPERTEN , data = fc1)
+
+zp1 <- cox.zph(fit1_ph, transform = "identity")
+
+kable(round(zp1$table, 3)) %>% kable_styling("striped", position = "center")
+
+oldpar <- par(mfrow = c(2, 3), mar = c(5, 5, 1, 1))
+plot(zp1, resid = FALSE)
+par(oldpar)
+```
+
+
+internal validation
+split 70% for train, 30% for test
+```{r}
+set.seed(123)
+
+n <- nrow(fc1)
+
+index <- sample(1:n, size = floor(0.7 * n))
+
+train_set <- fc1[index, ]
+test_set <- fc1[-index, ]
+
+
+cat("row numbers of train set:", nrow(train_set), "\n")
+cat("row numbers of test set:", nrow(test_set), "\n")
+
+```
+
+EDA for train set
+```{r}
+gtsummary::tbl_summary(train_set)
+```
+
+EDA for test set
+```{r}
+gtsummary::tbl_summary(test_set)
+```
+
+survival plots
+```{r}
+
+sfit <- survfit(Surv(time_years, event == 1) ~ 1,
+data = train_set) # survival
+sfit_c <- survfit(Surv(time_years, event == 0) ~ 1,
+data = train_set) # censoring
+
+
+dev_plots <- list()
+
+km_plot <- survminer::ggsurvplot(
+  sfit,  
+  data = train_set,
+  risk.table = TRUE,
+  risk.table.fontsize = 3.6,
+  palette = 3,
+  size = 1.5,
+  censor = FALSE,
+  legend = "none",
+  title = "Failure-free survival",
+  xlab = "Years",
+  ylab = "Probability"
+)
+
+
+km_plot$plot <- km_plot$plot + theme_minimal() + 
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  )
+
+
+dev_plots[[1]] <- km_plot
+
+
+censoring_plot <- survminer::ggsurvplot(
+  sfit_c,  
+  data = train_set,
+  risk.table = TRUE,
+  risk.table.fontsize = 3.6,
+  palette = 2,
+  size = 1.5,
+  censor = TRUE,  
+  legend = "none",
+  title = "Censoring",
+  xlab = "Years",
+  ylab = "Probability"
+)
+
+
+censoring_plot$plot <- censoring_plot$plot + theme_minimal() + 
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  )
+
+
+dev_plots[[2]] <- censoring_plot
+
+
+combined_plots <- survminer::arrange_ggsurvplots(
+  list(dev_plots[[1]], dev_plots[[2]]),
+  print = TRUE,
+  ncol = 2,
+  nrow = 1,
+  risk.table.height = 0.15,
+  title = "CVD"
+)
+
+
+print(combined_plots)
+
+
+```
+
+
+
+check assumption
+the proportional hazard (PH) assumption
+```{r}
+fit1_ph <- coxph(Surv(time_years, event) ~ AGE + SYSBP  + SEX + DIABETES + HYPERTEN, data = train_set)
+
+zp1 <- cox.zph(fit1_ph, transform = "identity")
+
+kable(round(zp1$table, 3)) %>% kable_styling("striped", position = "center")
+
+oldpar <- par(mfrow = c(2, 3), mar = c(5, 5, 1, 1))
+plot(zp1, resid = FALSE)
+par(oldpar)
+```
+
+
+build the original model
+```{r}
+
+fit_cvd <- coxph(Surv(time_years, event) ~ AGE + SYSBP + SEX + DIABETES + HYPERTEN, 
+                 data = train_set, 
+                 x = TRUE)
+
+bh_cvd <- basehaz(fit_cvd, centered = FALSE)
+bh_cvd$surv_cvd <- exp(-bh_cvd$hazard) 
+
+closest_time_5 <- bh_cvd$time[which.min(abs(bh_cvd$time - 5))]
+
+S0_closest_5 <- bh_cvd$surv[closest_time_5]
+print(S0_closest_5)
+
+closest_time_20 <- bh_cvd$time[which.min(abs(bh_cvd$time - 20))]
+S0_closest_20 <- bh_cvd$surv[closest_time_20]
+print(S0_closest_20)
+
+bh_cvd_c <- basehaz(fit_cvd, centered = TRUE)
+bh_cvd_c$surv_cvd_c <- exp(-bh_cvd_c$hazard) # 基线生存率
+closest_time_c_5 <- bh_cvd_c$time[which.min(abs(bh_cvd_c$time - 5))]
+S0_closest_c_5 <- bh_cvd_c$surv[closest_time_c_5]
+print(S0_closest_c_5)
+
+closest_time_c_20 <- bh_cvd_c$time[which.min(abs(bh_cvd_c$time - 20))]
+S0_closest_c_20 <- bh_cvd_c$surv[closest_time_c_20]
+print(S0_closest_c_20)
+
+
+# S(t = 20) = S0(t = 20)**exp(X*beta)
+summary(fit_cvd)
+```
+
+
+build two error model
+error model 3
+```{r}
+fit_cvd_bad3 <- coxph(Surv(time_years, event) ~ (AGE + SYSBP + SEX + DIABETES + HYPERTEN)^2  , data = train_set, x = TRUE)
+
+```
+
+
+
+
+
+error model 2
+```{r}
+
+# Error model 2
+fit_cvd_bad2 <- fit_cvd
+fit_cvd_bad2$coefficients <- fit_cvd$coefficients * 1.5  
+
+```
+
+Erroe Model 1
+```{r}
+linear_pred <- predict(fit_cvd, type = "lp")
+
+new_linear_pred <- linear_pred + log(2)
+
+
+fit_cvd_bad1 <- coxph(Surv(time_years, event) ~ offset(new_linear_pred),  data = train_set, 
+                      x = TRUE)
+
+
+bh_original <- basehaz(fit_cvd, centered = FALSE)
+bh_modified <- basehaz(fit_cvd_bad1, centered = FALSE)
+
+hazard_ratio <- bh_modified$hazard / bh_original$hazard
+print(summary(hazard_ratio))
+
+```
+
+
+
+```{r}
+print(fit_cvd) # the original model
+print(fit_cvd_bad1) # Error Model 1
+print(fit_cvd_bad2) # Error Model 2
+print(fit_cvd_bad3) # Error Model 3
+
+```
+
+
+
+
+
+
+survival plots
+```{r}
+
+surv_obj_cvd <- survfit(fit_cvd)
+surv_obj_cvd_bad1 <- survfit(fit_cvd_bad1)
+surv_obj_cvd_bad3 <- survfit(fit_cvd_bad3)
+surv_obj_cvd_bad2 <- survfit(fit_cvd_bad2)
+
+
+surv_df_cvd <- data.frame(
+  time = surv_obj_cvd$time,
+  surv = surv_obj_cvd$surv,
+  upper = surv_obj_cvd$upper,
+  lower = surv_obj_cvd$lower
+)
+surv_df_cvd_bad1 <- data.frame(
+  time = surv_obj_cvd_bad1$time,
+  surv = surv_obj_cvd_bad1$surv,
+  upper = surv_obj_cvd_bad1$upper,
+  lower = surv_obj_cvd_bad1$lower
+)
+surv_df_cvd_bad3 <- data.frame(
+  time = surv_obj_cvd_bad3$time,
+  surv = surv_obj_cvd_bad3$surv,
+  upper = surv_obj_cvd_bad3$upper,
+  lower = surv_obj_cvd_bad3$lower
+)
+surv_df_cvd_bad2 <- data.frame(
+  time = surv_obj_cvd_bad2$time,
+  surv = surv_obj_cvd_bad2$surv,
+  upper = surv_obj_cvd_bad2$upper,
+  lower = surv_obj_cvd_bad2$lower
+)
+
+
+
+```
+
+```{r}
+
+surv_df_cvd$model <- "Original Model"
+surv_df_cvd_bad1$model <- "Error Model 1"
+surv_df_cvd_bad3$model <- "Error Model 3"
+surv_df_cvd_bad2$model <- "Error Model 2"
+
+
+surv_df_all <- rbind(surv_df_cvd, surv_df_cvd_bad1, surv_df_cvd_bad3, surv_df_cvd_bad2)
+
+
+ggplot(surv_df_all, aes(x = time, y = surv, color = model, group = model)) +
+  geom_line(aes(linetype = model)) +  
+  geom_point(aes(shape = model), size = 1, position = position_dodge(width = 0.2)) +  
+  scale_linetype_manual(values = c("solid", "twodash", "dotted", "dashed")) +  
+  scale_shape_manual(values = c(16, 17, 18, 19)) +  
+  scale_color_manual(values = c("Original Model" = "red", "Error Model 1" = "skyblue", "Error Model 3" = "orange", "Error Model 2" = "green")) +  
+  labs(title = "Comparison of Survival Curves", x = "Time (years)", y = "Survival Probability") +
+  theme_minimal() +
+  guides(linetype = guide_legend(title = "Model"), shape = guide_legend(title = "Model"))
+
+```
+
+
+
+calibration 
+fixed time 5 years
+```{r}
+#5 years
+obj <- summary(survfit(Surv(time_years, event) ~ 1, 
+                       data = test_set), 
+               times = 5)
+
+# The standard error at 5 years
+se_obj <- obj$std.err
+
+
+# Prediction for the original model
+pred <- riskRegression::predictRisk(fit_cvd,
+                                    newdata = test_set, 
+                                    times = 5)
+
+# Prediction for the first modified model
+pred_pgr_bad1 <- riskRegression::predictRisk(fit_cvd_bad1,
+                                             newdata = test_set,
+                                             times = 5)
+pred_pgr_bad3 <- riskRegression::predictRisk(fit_cvd_bad3,
+                                             newdata = test_set,
+                                             times = 5)
+# Prediction for the second modified model
+pred_pgr_bad2 <- riskRegression::predictRisk(fit_cvd_bad2,
+                                             newdata = test_set,
+                                             times = 5)
+
+
+
+OE <- (1 - obj$surv) / mean(pred)
+OE_bad1 <- (1 - obj$surv) / mean(pred_pgr_bad1)
+OE_bad3 <- (1 - obj$surv) / mean(pred_pgr_bad3)
+OE_bad2 <- (1 - obj$surv) / mean(pred_pgr_bad2)
+
+#95% CI
+# Assuming you already have obj, pred, pred_pgr_bad1, and pred_pgr_bad2
+# Calculate variances or get standard errors (se) for each prediction
+se_pred <- sd(pred) / sqrt(length(pred))
+se_pred_bad1 <- sd(pred_pgr_bad1) / sqrt(length(pred_pgr_bad1))
+se_pred_bad3 <- sd(pred_pgr_bad3) / sqrt(length(pred_pgr_bad3))
+se_pred_bad2 <- sd(pred_pgr_bad2) / sqrt(length(pred_pgr_bad2))
+
+# Calculate standard error for O/E using delta method approximation
+se_OE <- sqrt((se_obj / mean(pred))^2 + (obj$surv * se_pred / mean(pred)^2)^2)
+se_OE_bad1 <- sqrt((se_obj / mean(pred_pgr_bad1))^2 + (obj$surv * se_pred_bad1 / mean(pred_pgr_bad1)^2)^2)
+se_OE_bad3 <- sqrt((se_obj / mean(pred_pgr_bad3))^2 + (obj$surv * se_pred_bad3 / mean(pred_pgr_bad3)^2)^2)
+se_OE_bad2 <- sqrt((se_obj / mean(pred_pgr_bad2))^2 + (obj$surv * se_pred_bad2 / mean(pred_pgr_bad2)^2)^2)
+
+# Calculate 95% CIs
+ci_lower_OE <- OE - 1.96 * se_OE
+ci_upper_OE <- OE + 1.96 * se_OE
+ci_lower_OE_bad1 <- OE_bad1 - 1.96 * se_OE_bad1
+ci_upper_OE_bad1 <- OE_bad1 + 1.96 * se_OE_bad1
+ci_lower_OE_bad3 <- OE_bad3 - 1.96 * se_OE_bad3
+ci_upper_OE_bad3 <- OE_bad3 + 1.96 * se_OE_bad3
+ci_lower_OE_bad2 <- OE_bad2 - 1.96 * se_OE_bad2
+ci_upper_OE_bad2 <- OE_bad2 + 1.96 * se_OE_bad2
+
+# Print results
+cat("Original Model O/E:", OE, "\n95% CI: [", ci_lower_OE, ", ", ci_upper_OE, "]\n\n")
+cat("Error Model 1 O/E:", OE_bad1, "\n95% CI: [", ci_lower_OE_bad1, ", ", ci_upper_OE_bad1, "]\n\n")
+cat("Error Model 3 O/E:", OE_bad3, "\n95% CI: [", ci_lower_OE_bad3, ", ", ci_upper_OE_bad3, "]\n\n")
+cat("Error Model 2 O/E:", OE_bad2, "\n95% CI: [", ci_lower_OE_bad2, ", ", ci_upper_OE_bad2, "]\n")
+
+```
+
+
+
+
+
+
+time range
+```{r}
+
+max_time <- max(test_set$time_years)
+
+
+pred_en <- predictRisk(fit_cvd, newdata = test_set, times = max_time)
+pred_bad1_en <- predictRisk(fit_cvd_bad1, newdata = test_set, times = max_time)
+pred_bad3_en <- predictRisk(fit_cvd_bad3, newdata = test_set, times = max_time)
+pred_bad2_en <- predictRisk(fit_cvd_bad2, newdata = test_set, times = max_time)
+
+
+km_fit <- survfit(Surv(time_years, event) ~ 1, data = test_set)
+obj <- summary(km_fit)
+
+
+OE_en <- (1 - tail(obj$surv, n = 1)) / mean(pred_en)
+OE_bad1_en <- (1 - tail(obj$surv, n = 1)) / mean(pred_bad1_en)
+OE_bad3_en <- (1 - tail(obj$surv, n = 1)) / mean(pred_bad3_en)
+OE_bad2_en <- (1 - tail(obj$surv, n = 1)) / mean(pred_bad2_en)
+
+
+n_bootstraps <- 200
+
+
+OE_boot_en <- numeric(n_bootstraps)
+OE_boot_bad1_en <- numeric(n_bootstraps)
+OE_boot_bad3_en <- numeric(n_bootstraps)
+OE_boot_bad2_en <- numeric(n_bootstraps)
+
+set.seed(123)  
+
+for (i in 1:n_bootstraps) {
+  
+  bootstrap_indices <- sample(seq_len(nrow(test_set)), replace = TRUE)
+  bootstrap_sample <- test_set[bootstrap_indices, ]
+  
+  
+  km_fit_boot <- survfit(Surv(time_years, event) ~ 1, data = bootstrap_sample)
+  obj_boot <- summary(km_fit_boot)
+  
+  
+  pred_boot_en <- predictRisk(fit_cvd, newdata = bootstrap_sample, times = max_time)
+  pred_boot_bad1_en <- predictRisk(fit_cvd_bad1, newdata = bootstrap_sample, times = max_time)
+  pred_boot_bad3_en <- predictRisk(fit_cvd_bad3, newdata = bootstrap_sample, times = max_time)
+  pred_boot_bad2_en <- predictRisk(fit_cvd_bad2, newdata = bootstrap_sample, times = max_time)
+  
+  
+  OE_boot_en[i] <- (1 - tail(obj_boot$surv, n = 1)) / mean(pred_boot_en)
+  OE_boot_bad1_en[i] <- (1 - tail(obj_boot$surv, n = 1)) / mean(pred_boot_bad1_en)
+  OE_boot_bad3_en[i] <- (1 - tail(obj_boot$surv, n = 1)) / mean(pred_boot_bad3_en)
+  OE_boot_bad2_en[i] <- (1 - tail(obj_boot$surv, n = 1)) / mean(pred_boot_bad2_en)
+}
+
+
+ci_OE_en <- quantile(OE_boot_en, probs = c(0.025, 0.975))
+ci_OE_bad1_en <- quantile(OE_boot_bad1_en, probs = c(0.025, 0.975))
+ci_OE_bad3_en <- quantile(OE_boot_bad3_en, probs = c(0.025, 0.975))
+ci_OE_bad2_en <- quantile(OE_boot_bad2_en, probs = c(0.025, 0.975))
+
+
+cat("Original Model O/E Ratio for entire time range:", OE_en, "\n")
+cat("95% CI for Original Model O/E Ratio:", ci_OE_en, "\n\n")
+
+cat("Error Model 1 O/E Ratio for entire time range:", OE_bad1_en, "\n")
+cat("95% CI for Error Model 1 O/E Ratio:", ci_OE_bad1_en, "\n\n")
+
+cat("Error Model 3 O/E Ratio for entire time range:", OE_bad3_en, "\n")
+cat("95% CI for Error Model 3 O/E Ratio:", ci_OE_bad3_en, "\n\n")
+
+cat("Error Model 2 O/E Ratio for entire time range:", OE_bad2_en, "\n")
+cat("95% CI for Error Model 2 O/E Ratio:", ci_OE_bad2_en, "\n")
+
+```
+
+another approach for time range in level 1
+```{r}
+# Original Model Calibration
+pred_en <- predict(fit_cvd, newdata = test_set, type = "expected")
+pred_enfit <- glm(event ~ offset(log(pred_en)),
+                   family = poisson(link = "log"),
+                   data = test_set,
+                   subset = (pred_en > 0))
+int_summary <- summary(pred_enfit)$coefficients
+cat("Original Model Intercept Summary:\n")
+print(int_summary)
+
+# Calibration for Error Model 1 (Modified Baseline Hazard)
+linear_pred_test <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2) 
+
+
+pred_bad1_en <- exp(linear_pred_test)
+
+
+pred_bad1_enfit <- glm(event ~ offset(log(pred_bad1_en)),
+                       family = poisson(link = "log"),
+                       data = test_set,
+                       subset = (pred_bad1_en > 0))
+int_summary_bad1 <- summary(pred_bad1_enfit)$coefficients
+cat("Error Model 1 Intercept Summary:\n")
+print(int_summary_bad1)
+
+# Calibration for Error Model 3 (Another Modified Model)
+pred_bad3_en <- predict(fit_cvd_bad3, newdata = test_set, type = "expected")
+pred_bad3_enfit <- glm(event ~ offset(log(pred_bad3_en)),
+                        family = poisson(link = "log"),
+                        data = test_set,
+                        subset = (pred_bad3_en > 0))
+int_summary_bad3 <- summary(pred_bad3_enfit)$coefficients
+cat("Error Model 3 Intercept Summary:\n")
+print(int_summary_bad3)
+
+# Calibration for Error Model 2 (Modified Coefficients)
+pred_bad2_en <- predict(fit_cvd_bad2, newdata = test_set, type = "expected")
+pred_bad2_enfit <- glm(event ~ offset(log(pred_bad2_en)),
+                       family = poisson(link = "log"),
+                       data = test_set,
+                       subset = (pred_bad2_en > 0))
+int_summary_bad2 <- summary(pred_bad2_enfit)$coefficients
+cat("Error Model 2 Intercept Summary:\n")
+print(int_summary_bad2)
+
+```
+
+level 2 - 5 years
+
+level 2 - weak calibration
+fixed time
+```{r}
+
+test_set$lp_sd <- predict(fit_cvd, newdata = test_set, type = "lp")
+
+
+
+test_set$lp_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2)
+
+
+
+test_set$lp_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "lp")
+
+
+test_set$lp_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "lp")
+
+
+gval_sd <- coxph(Surv(time_years, event) ~ lp_sd, data = test_set)
+gval_bad1_sd <- coxph(Surv(time_years, event) ~ lp_bad1_sd, data = test_set)
+gval_bad3_sd <- coxph(Surv(time_years, event) ~ lp_bad3_sd, data = test_set)
+gval_bad2_sd <- coxph(Surv(time_years, event) ~ lp_bad2_sd, data = test_set)
+
+
+summary(gval_sd$coefficients)
+summary(gval_bad1_sd$coefficients)
+summary(gval_bad3_sd$coefficients)
+summary(gval_bad2_sd$coefficients)
+
+
+cat("Original Model calibration slope:", gval_sd$coefficients, "\n")
+cat("Error Model 1 calibration slope:", gval_bad1_sd$coefficients, "\n")
+cat("Error Model 3 calibration slope:", gval_bad3_sd$coefficients, "\n")
+cat("Error Model 2 calibration slope:", gval_bad2_sd$coefficients, "\n")
+
+```
+
+95%CI
+```{r}
+
+test_set$lp_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2)
+
+test_set$lp_sd <- predict(fit_cvd, newdata = test_set, type = "lp")
+test_set$lp_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "lp")
+test_set$lp_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "lp")
+
+
+bootstrap_function_sd <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_sd, data = resampled_data)
+  return(coef(fit))
+}
+
+bootstrap_function_bad1 <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_bad1_sd, data = resampled_data)
+  return(coef(fit))
+}
+
+bootstrap_function_bad3 <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_bad3_sd, data = resampled_data)
+  return(coef(fit))
+}
+
+bootstrap_function_bad2 <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_bad2_sd, data = resampled_data)
+  return(coef(fit))
+}
+
+
+results_sd <- boot(data = test_set, statistic = bootstrap_function_sd, R = 200)
+results_bad1 <- boot(data = test_set, statistic = bootstrap_function_bad1, R = 200)
+results_bad3 <- boot(data = test_set, statistic = bootstrap_function_bad3, R = 200)
+results_bad2 <- boot(data = test_set, statistic = bootstrap_function_bad2, R = 200)
+
+
+ci_sd <- boot.ci(results_sd, type = "perc")
+ci_bad1 <- boot.ci(results_bad1, type = "perc")
+ci_bad3 <- boot.ci(results_bad3, type = "perc")
+ci_bad2 <- boot.ci(results_bad2, type = "perc")
+
+
+cat("Original Model CI: ", ci_sd$t0, " (", ci_sd$perc[4], ", ", ci_sd$perc[5], ")\n")
+cat("Error Model 1 CI: ", ci_bad1$t0, " (", ci_bad1$perc[4], ", ", ci_bad1$perc[5], ")\n")
+cat("Error Model 3 CI: ", ci_bad3$t0, " (", ci_bad3$perc[4], ", ", ci_bad3$perc[5], ")\n")
+cat("Error Model 2 CI: ", ci_bad2$t0, " (", ci_bad2$perc[4], ", ", ci_bad2$perc[5], ")\n")
+
+```
+
+
+l2 time range
+```{r}
+
+test_set$lp_sd <- predict(fit_cvd, newdata = test_set, type = "lp")
+test_set$p_sd <- predict(fit_cvd, newdata = test_set, type = "expected")
+
+
+test_set$lp_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2)
+test_set$p_bad1_sd <- exp(test_set$lp_bad1_sd)  
+test_set$lp_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "lp")
+test_set$p_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "expected")
+
+
+test_set$lp_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "lp")
+test_set$p_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "expected")
+
+
+test_set$logbase_sd <- log(test_set$p_sd) - test_set$lp_sd
+test_set$logbase_bad1_sd <- log(test_set$p_bad1_sd) - test_set$lp_bad1_sd
+test_set$logbase_bad3_sd <- log(test_set$p_bad3_sd) - test_set$lp_bad3_sd
+test_set$logbase_bad2_sd <- log(test_set$p_bad2_sd) - test_set$lp_bad2_sd
+
+
+p_sd_fit <- glm(event ~ lp_sd + offset(logbase_sd),
+                family = poisson,
+                data = test_set,
+                subset = (test_set$p_sd > 0))
+p_bad1_sd_fit <- glm(event ~ lp_bad1_sd + offset(logbase_bad1_sd),
+                     family = poisson,
+                     data = test_set,
+                     subset = (test_set$p_bad1_sd > 0))
+p_bad3_sd_fit <- glm(event ~ lp_bad3_sd + offset(logbase_bad3_sd),
+                      family = poisson,
+                      data = test_set,
+                      subset = (test_set$p_bad3_sd > 0))
+p_bad2_sd_fit <- glm(event ~ lp_bad2_sd + offset(logbase_bad2_sd),
+                     family = poisson,
+                     data = test_set,
+                     subset = (test_set$p_bad2_sd > 0))
+
+
+slope_sd_summary <- summary(p_sd_fit)$coefficients
+slope_bad1_sd_summary <- summary(p_bad1_sd_fit)$coefficients
+slope_bad3_sd_summary <- summary(p_bad3_sd_fit)$coefficients
+slope_bad2_sd_summary <- summary(p_bad2_sd_fit)$coefficients
+
+
+bootstrap_function_sd <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_sd, data = resampled_data)
+  return(coef(fit)['lp_sd'])
+}
+
+bootstrap_function_bad1_sd <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_bad1_sd, data = resampled_data)
+  return(coef(fit)['lp_bad1_sd'])
+}
+
+bootstrap_function_bad3_sd <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_bad3_sd, data = resampled_data)
+  return(coef(fit)['lp_bad3_sd'])
+}
+
+bootstrap_function_bad2_sd <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  fit <- coxph(Surv(time_years, event) ~ lp_bad2_sd, data = resampled_data)
+  return(coef(fit)['lp_bad2_sd'])
+}
+
+
+results_sd <- boot(data = test_set, statistic = bootstrap_function_sd, R = 200)
+results_bad1_sd <- boot(data = test_set, statistic = bootstrap_function_bad1_sd, R = 200)
+results_bad3_sd <- boot(data = test_set, statistic = bootstrap_function_bad3_sd, R = 200)
+results_bad2_sd <- boot(data = test_set, statistic = bootstrap_function_bad2_sd, R = 200)
+
+
+ci_sd <- boot.ci(results_sd, type = "perc")
+ci_bad1_sd <- boot.ci(results_bad1_sd, type = "perc")
+ci_bad3_sd <- boot.ci(results_bad3_sd, type = "perc")
+ci_bad2_sd <- boot.ci(results_bad2_sd, type = "perc")
+
+cat("Original Model CI: ", results_sd$t0, " (", ci_sd$perc[4], ", ", ci_sd$perc[5], ")\n")
+cat("Error Model 1 CI: ", results_bad1_sd$t0, " (", ci_bad1_sd$perc[4], ", ", ci_bad1_sd$perc[5], ")\n")
+cat("Error Model 3 CI: ", results_bad3_sd$t0, " (", ci_bad3_sd$perc[4], ", ", ci_bad3_sd$perc[5], ")\n")
+cat("Error Model 2 CI: ", results_bad2_sd$t0, " (", ci_bad2_sd$perc[4], ", ", ci_bad2_sd$perc[5], ")\n")
+
+```
+
+
+level 3 - moderate calibration
+fixed time
+```{r}
+
+test_set$pred_sd <- riskRegression::predictRisk(fit_cvd, newdata = test_set, times = 5)
+
+
+test_set$lp_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2)
+test_set$pred_bad1_sd <- 1 - exp(-exp(test_set$lp_bad1_sd))  
+
+test_set$pred_bad3_sd <- riskRegression::predictRisk(fit_cvd_bad3, newdata = test_set, times = 5)
+
+
+test_set$pred_bad2_sd <- riskRegression::predictRisk(fit_cvd_bad2, newdata = test_set, times = 5)
+
+
+test_set$pred_sd.cll <- log(-log(1 - test_set$pred_sd))
+test_set$pred_bad1_sd.cll <- log(-log(1 - test_set$pred_bad1_sd))
+test_set$pred_bad3_sd.cll <- log(-log(1 - test_set$pred_bad3_sd))
+test_set$pred_bad2_sd.cll <- log(-log(1 - test_set$pred_bad2_sd))
+
+```
+
+
+```{r}
+
+vcal_sd <- rms::cph(Surv(time_years, event) ~ rcs(pred_sd.cll, 3), x = TRUE, y = TRUE, surv = TRUE, data = test_set)
+vcal_bad1_sd <- rms::cph(Surv(time_years, event) ~ rcs(pred_bad1_sd.cll, 3), x = TRUE, y = TRUE, surv = TRUE, data = test_set)
+vcal_bad3_sd <- rms::cph(Surv(time_years, event) ~ rcs(pred_bad3_sd.cll, 3), x = TRUE, y = TRUE, surv = TRUE, data = test_set)
+vcal_bad2_sd <- rms::cph(Surv(time_years, event) ~ rcs(pred_bad2_sd.cll, 3), x = TRUE, y = TRUE, surv = TRUE, data = test_set)
+
+
+dat_cal_sd <- cbind.data.frame(
+  "obs" = 1 - rms::survest(vcal_sd, times = 5, newdata = test_set)$surv,
+  "lower" = 1 - rms::survest(vcal_sd, times = 5, newdata = test_set)$upper,
+  "upper" = 1 - rms::survest(vcal_sd, times = 5, newdata = test_set)$lower,
+  "pred" = test_set$pred_sd,
+  
+  "obs_bad1_sd" = 1 - rms::survest(vcal_bad1_sd, times = 5, newdata = test_set)$surv,
+  "lower_bad1_sd" = 1 - rms::survest(vcal_bad1_sd, times = 5, newdata = test_set)$upper,
+  "upper_bad1_sd" = 1 - rms::survest(vcal_bad1_sd, times = 5, newdata = test_set)$lower,
+  "pred_bad1_sd" = test_set$pred_bad1_sd,
+  
+  "obs_bad3_sd" = 1 - rms::survest(vcal_bad3_sd, times = 5, newdata = test_set)$surv,
+  "lower_bad3_sd" = 1 - rms::survest(vcal_bad3_sd, times = 5, newdata = test_set)$upper,
+  "upper_bad3_sd" = 1 - rms::survest(vcal_bad3_sd, times = 5, newdata = test_set)$lower,
+  "pred_bad3_sd" = test_set$pred_bad3_sd,
+  
+  "obs_bad2_sd" = 1 - rms::survest(vcal_bad2_sd, times = 5, newdata = test_set)$surv,
+  "lower_bad2_sd" = 1 - rms::survest(vcal_bad2_sd, times = 5, newdata = test_set)$upper,
+  "upper_bad2_sd" = 1 - rms::survest(vcal_bad2_sd, times = 5, newdata = test_set)$lower,
+  "pred_bad2_sd" = test_set$pred_bad2_sd
+)
+
+```
+
+
+```{r}
+
+dat_cal_sd <- dat_cal_sd[order(dat_cal_sd$pred), ]
+
+par(xaxs = "i", yaxs = "i", las = 1, mar = c(5, 5, 3, 3) + 0.1)
+
+plot(dat_cal_sd$pred, dat_cal_sd$obs,
+     type = "l",
+     lty = 1,
+     xlim = c(0, 1),
+     ylim = c(0, 1),
+     lwd = 2,
+     xlab = "Predicted risk from developed model",
+     ylab = "Predicted risk from refitted model",
+     main = "Original Model - 5 years",
+     cex.axis = 0.9,
+     cex.lab = 1.0,
+     bty = "n")
+
+lines(dat_cal_sd$pred, dat_cal_sd$lower, type = "l", lty = 2, col = "blue", lwd = 2)
+lines(dat_cal_sd$pred, dat_cal_sd$upper, type = "l", lty = 2, col = "blue", lwd = 2)
+
+abline(0, 1, lwd = 2, lty = 2, col = "red")
+
+legend("bottomright",
+       legend = c("Ideal calibration", "Calibration curve based on secondary Cox model", "95% confidence interval"),
+       col = c("red", "black", "blue"),
+       lty = c(2, 1, 2),
+       lwd = c(2, 2, 2),
+       bty = "n",
+       cex = 0.8)
+
+
+dat_cal_sd <- dat_cal_sd[order(dat_cal_sd$pred_bad1_sd), ]
+
+par(xaxs = "i", yaxs = "i", las = 1, mar = c(5, 5, 3, 3) + 0.1)
+
+plot(dat_cal_sd$pred_bad1_sd, dat_cal_sd$obs_bad1_sd,
+     type = "l",
+     lty = 1,
+     xlim = c(0, 1),
+     ylim = c(0, 1),
+     lwd = 2,
+     xlab = "Predicted risk from developed model",
+     ylab = "Predicted risk from refitted model",
+     main = "Error Model 1 - 5 years",
+     cex.axis = 0.9,
+     cex.lab = 1.0,
+     bty = "n")
+
+lines(dat_cal_sd$pred_bad1_sd, dat_cal_sd$lower_bad1_sd, type = "l", lty = 2, col = "blue", lwd = 2)
+lines(dat_cal_sd$pred_bad1_sd, dat_cal_sd$upper_bad1_sd, type = "l", lty = 2, col = "blue", lwd = 2)
+
+abline(0, 1, lwd = 2, lty = 2, col = "red")
+
+legend("bottomright",
+       legend = c("Ideal calibration", "Calibration curve based on secondary Cox model", "95% confidence interval"),
+       col = c("red", "black", "blue"),
+       lty = c(2, 1, 2),
+       lwd = c(2, 2, 2),
+       bty = "n",
+       cex = 0.8)
+
+
+dat_cal_sd <- dat_cal_sd[order(dat_cal_sd$pred_bad3_sd), ]
+
+par(xaxs = "i", yaxs = "i", las = 1, mar = c(5, 5, 3, 3) + 0.1)
+
+plot(dat_cal_sd$pred_bad3_sd, dat_cal_sd$obs_bad3_sd,
+     type = "l",
+     lty = 1,
+     xlim = c(0, 1),
+     ylim = c(0, 1),
+     lwd = 2,
+     xlab = "Predicted risk from developed model",
+     ylab = "Predicted risk from refitted model",
+     main = "Error Model 3 - 5 years",
+     cex.axis = 0.9,
+     cex.lab = 1.0,
+     bty = "n")
+
+lines(dat_cal_sd$pred_bad3_sd, dat_cal_sd$lower_bad3_sd, type = "l", lty = 2, col = "blue", lwd = 2)
+lines(dat_cal_sd$pred_bad3_sd, dat_cal_sd$upper_bad3_sd, type = "l", lty = 2, col = "blue", lwd = 2)
+
+abline(0, 1, lwd = 2, lty = 2, col = "red")
+
+legend("bottomright",
+       legend = c("Ideal calibration", "Calibration curve based on secondary Cox model", "95% confidence interval"),
+       col = c("red", "black", "blue"),
+       lty = c(2, 1, 2),
+       lwd = c(2, 2, 2),
+       bty = "n",
+       cex = 0.8)
+
+
+dat_cal_sd <- dat_cal_sd[order(dat_cal_sd$pred_bad2_sd), ]
+
+par(xaxs = "i", yaxs = "i", las = 1, mar = c(5, 5, 3, 3) + 0.1)
+
+plot(dat_cal_sd$pred_bad2_sd, dat_cal_sd$obs_bad2_sd,
+     type = "l",
+     lty = 1,
+     xlim = c(0, 1),
+     ylim = c(0, 1),
+     lwd = 2,
+     xlab = "Predicted risk from developed model",
+     ylab = "Predicted risk from refitted model",
+     main = "Error Model 2 - 5 years",
+     cex.axis = 0.9,
+     cex.lab = 1.0,
+     bty = "n")
+
+lines(dat_cal_sd$pred_bad2_sd, dat_cal_sd$lower_bad2_sd, type = "l", lty = 2, col = "blue", lwd = 2)
+lines(dat_cal_sd$pred_bad2_sd, dat_cal_sd$upper_bad2_sd, type = "l", lty = 2, col = "blue", lwd = 2)
+
+abline(0, 1, lwd = 2, lty = 2, col = "red")
+
+legend("bottomright",
+       legend = c("Ideal calibration", "Calibration curve based on secondary Cox model", "95% confidence interval"),
+       col = c("red", "black", "blue"),
+       lty = c(2, 1, 2),
+       lwd = c(2, 2, 2),
+       bty = "n",
+       cex = 0.8)
+
+
+```
+
+numerical metrics
+```{r}
+
+test_set$lp_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2)
+
+
+test_set$pred_sd <- riskRegression::predictRisk(fit_cvd, newdata = test_set, times = 5)
+test_set$pred_bad1_sd <- 1 - exp(-exp(test_set$lp_bad1_sd))  
+test_set$pred_bad3_sd <- riskRegression::predictRisk(fit_cvd_bad3, newdata = test_set, times = 5)
+test_set$pred_bad2_sd <- riskRegression::predictRisk(fit_cvd_bad2, newdata = test_set, times = 5)
+
+
+dat_cal_sd <- cbind.data.frame(
+  "obs" = 1 - rms::survest(vcal_sd, times = 5, newdata = test_set)$surv,
+  "pred" = test_set$pred_sd,
+  
+  "obs_bad1_sd" = 1 - rms::survest(vcal_bad1_sd, times = 5, newdata = test_set)$surv,
+  "pred_bad1_sd" = test_set$pred_bad1_sd,
+  
+  "obs_bad3_sd" = 1 - rms::survest(vcal_bad3_sd, times = 5, newdata = test_set)$surv,
+  "pred_bad3_sd" = test_set$pred_bad3_sd,
+  
+  "obs_bad2_sd" = 1 - rms::survest(vcal_bad2_sd, times = 5, newdata = test_set)$surv,
+  "pred_bad2_sd" = test_set$pred_bad2_sd
+)
+
+
+absdiff_cph_sd <- abs(dat_cal_sd$pred - dat_cal_sd$obs)
+absdiff_cph_sd <- na.omit(absdiff_cph_sd)  
+numsum_cph_sd <- c(
+  "ICI" = mean(absdiff_cph_sd, na.rm = TRUE),
+  setNames(quantile(absdiff_cph_sd, c(0.5, 0.9), na.rm = TRUE), c("E50", "E90"))
+)
+
+absdiff_cph_bad1_sd <- abs(dat_cal_sd$pred_bad1_sd - dat_cal_sd$obs_bad1_sd)
+absdiff_cph_bad1_sd <- na.omit(absdiff_cph_bad1_sd)  
+numsum_cph_bad1_sd <- c(
+  "ICI" = mean(absdiff_cph_bad1_sd, na.rm = TRUE),
+  setNames(quantile(absdiff_cph_bad1_sd, c(0.5, 0.9), na.rm = TRUE), c("E50", "E90"))
+)
+
+absdiff_cph_bad3_sd <- abs(dat_cal_sd$pred_bad3_sd - dat_cal_sd$obs_bad3_sd)
+absdiff_cph_bad3_sd <- na.omit(absdiff_cph_bad3_sd)  
+numsum_cph_bad3_sd <- c(
+  "ICI" = mean(absdiff_cph_bad3_sd, na.rm = TRUE),
+  setNames(quantile(absdiff_cph_bad3_sd, c(0.5, 0.9), na.rm = TRUE), c("E50", "E90"))
+)
+
+absdiff_cph_bad2_sd <- abs(dat_cal_sd$pred_bad2_sd - dat_cal_sd$obs_bad2_sd)
+absdiff_cph_bad2_sd <- na.omit(absdiff_cph_bad2_sd)  
+numsum_cph_bad2_sd <- c(
+  "ICI" = mean(absdiff_cph_bad2_sd, na.rm = TRUE),
+  setNames(quantile(absdiff_cph_bad2_sd, c(0.5, 0.9), na.rm = TRUE), c("E50", "E90"))
+)
+
+cat("Original Model Metrics:\n")
+cat("ICI: ", numsum_cph_sd["ICI"], "\n")
+cat("E50: ", numsum_cph_sd["E50"], "\n")
+cat("E90: ", numsum_cph_sd["E90"], "\n\n")
+
+cat("Error Model 1 Metrics:\n")
+cat("ICI: ", numsum_cph_bad1_sd["ICI"], "\n")
+cat("E50: ", numsum_cph_bad1_sd["E50"], "\n")
+cat("E90: ", numsum_cph_bad1_sd["E90"], "\n\n")
+
+cat("Error Model 3 Metrics:\n")
+cat("ICI: ", numsum_cph_bad3_sd["ICI"], "\n")
+cat("E50: ", numsum_cph_bad3_sd["E50"], "\n")
+cat("E90: ", numsum_cph_bad3_sd["E90"], "\n\n")
+
+cat("Error Model 2 Metrics:\n")
+cat("ICI: ", numsum_cph_bad2_sd["ICI"], "\n")
+cat("E50: ", numsum_cph_bad2_sd["E50"], "\n")
+cat("E90: ", numsum_cph_bad2_sd["E90"], "\n")
+
+
+```
+
+```{r}
+
+bootstrap_numerical_metrics <- function(data, indices) {
+  resampled_data <- data[indices, ]
+  
+  
+  resampled_data <- na.omit(resampled_data)
+  
+  absdiff <- abs(resampled_data$pred - resampled_data$obs)
+  ICI <- mean(absdiff, na.rm = TRUE)
+  E50 <- quantile(absdiff, 0.5, na.rm = TRUE)
+  E90 <- quantile(absdiff, 0.9, na.rm = TRUE)
+  
+  return(c(ICI, E50, E90))
+}
+
+
+results_sd <- boot(data = dat_cal_sd, statistic = bootstrap_numerical_metrics, R = 200)
+ci_ici_sd <- boot.ci(results_sd, type = "perc", index = 1)
+ci_e50_sd <- boot.ci(results_sd, type = "perc", index = 2)
+ci_e90_sd <- boot.ci(results_sd, type = "perc", index = 3)
+
+
+results_bad1_sd <- boot(data = dat_cal_sd, statistic = function(data, indices) {
+  resampled_data <- data[indices, ]
+  
+  
+  resampled_data <- na.omit(resampled_data)
+  
+  absdiff <- abs(resampled_data$pred_bad1_sd - resampled_data$obs_bad1_sd)
+  ICI <- mean(absdiff, na.rm = TRUE)
+  E50 <- quantile(absdiff, 0.5, na.rm = TRUE)
+  E90 <- quantile(absdiff, 0.9, na.rm = TRUE)
+  
+  return(c(ICI, E50, E90))
+}, R = 200)
+ci_ici_bad1_sd <- boot.ci(results_bad1_sd, type = "perc", index = 1)
+ci_e50_bad1_sd <- boot.ci(results_bad1_sd, type = "perc", index = 2)
+ci_e90_bad1_sd <- boot.ci(results_bad1_sd, type = "perc", index = 3)
+
+
+results_bad3_sd <- boot(data = dat_cal_sd, statistic = function(data, indices) {
+  resampled_data <- data[indices, ]
+  
+  
+  resampled_data <- na.omit(resampled_data)
+  
+  absdiff <- abs(resampled_data$pred_bad3_sd - resampled_data$obs_bad3_sd)
+  ICI <- mean(absdiff, na.rm = TRUE)
+  E50 <- quantile(absdiff, 0.5, na.rm = TRUE)
+  E90 <- quantile(absdiff, 0.9, na.rm = TRUE)
+  
+  return(c(ICI, E50, E90))
+}, R = 200)
+ci_ici_bad3_sd <- boot.ci(results_bad3_sd, type = "perc", index = 1)
+ci_e50_bad3_sd <- boot.ci(results_bad3_sd, type = "perc", index = 2)
+ci_e90_bad3_sd <- boot.ci(results_bad3_sd, type = "perc", index = 3)
+
+
+results_bad2_sd <- boot(data = dat_cal_sd, statistic = function(data, indices) {
+  resampled_data <- data[indices, ]
+  
+  
+  resampled_data <- na.omit(resampled_data)
+  
+  absdiff <- abs(resampled_data$pred_bad2_sd - resampled_data$obs_bad2_sd)
+  ICI <- mean(absdiff, na.rm = TRUE)
+  E50 <- quantile(absdiff, 0.5, na.rm = TRUE)
+  E90 <- quantile(absdiff, 0.9, na.rm = TRUE)
+  
+  return(c(ICI, E50, E90))
+}, R = 200)
+ci_ici_bad2_sd <- boot.ci(results_bad2_sd, type = "perc", index = 1)
+ci_e50_bad2_sd <- boot.ci(results_bad2_sd, type = "perc", index = 2)
+ci_e90_bad2_sd <- boot.ci(results_bad2_sd, type = "perc", index = 3)
+
+
+cat("Original Model ICI 95% CI: ", ci_ici_sd$perc[4], "-", ci_ici_sd$perc[5], "\n")
+cat("Original Model E50 95% CI: ", ci_e50_sd$perc[4], "-", ci_e50_sd$perc[5], "\n")
+cat("Original Model E90 95% CI: ", ci_e90_sd$perc[4], "-", ci_e90_sd$perc[5], "\n\n")
+
+cat("Error Model 1 ICI 95% CI: ", ci_ici_bad1_sd$perc[4], "-", ci_ici_bad1_sd$perc[5], "\n")
+cat("Error Model 1 E50 95% CI: ", ci_e50_bad1_sd$perc[4], "-", ci_e50_bad1_sd$perc[5], "\n")
+cat("Error Model 1 E90 95% CI: ", ci_e90_bad1_sd$perc[4], "-", ci_e90_bad1_sd$perc[5], "\n\n")
+
+cat("Error Model 3 ICI 95% CI: ", ci_ici_bad3_sd$perc[4], "-", ci_ici_bad3_sd$perc[5], "\n")
+cat("Error Model 3 E50 95% CI: ", ci_e50_bad3_sd$perc[4], "-", ci_e50_bad3_sd$perc[5], "\n")
+cat("Error Model 3 E90 95% CI: ", ci_e90_bad3_sd$perc[4], "-", ci_e90_bad3_sd$perc[5], "\n\n")
+
+cat("Error Model 2 ICI 95% CI: ", ci_ici_bad2_sd$perc[4], "-", ci_ici_bad2_sd$perc[5], "\n")
+cat("Error Model 2 E50 95% CI: ", ci_e50_bad2_sd$perc[4], "-", ci_e50_bad2_sd$perc[5], "\n")
+cat("Error Model 2 E90 95% CI: ", ci_e90_bad2_sd$perc[4], "-", ci_e90_bad2_sd$perc[5], "\n")
+
+```
+
+time range 1
+```{r}
+
+test_set$PI_sd <- predict(fit_cvd, newdata = test_set, type = "lp")
+
+
+test_set$PI_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2)
+
+
+test_set$PI_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "lp")
+test_set$PI_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "lp")
+
+
+exp_t_sd <- predict(fit_cvd, newdata = test_set, type = "expected")
+exp_t_bad1_sd <- 1 - exp(-exp(test_set$PI_bad1_sd)) 
+exp_t_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "expected")
+exp_t_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "expected")
+
+
+fit_01_sd <- glm(event ~ offset(log(exp_t_sd)),
+                 family = poisson,
+                 data = test_set,
+                 subset = (exp_t_sd > 0))
+fit_01_bad1_sd <- glm(event ~ offset(log(exp_t_bad1_sd)),
+                      family = poisson,
+                      data = test_set,
+                      subset = (exp_t_bad1_sd > 0))
+fit_01_bad3_sd <- glm(event ~ offset(log(exp_t_bad3_sd)),
+                       family = poisson,
+                       data = test_set,
+                       subset = (exp_t_bad3_sd > 0))
+fit_01_bad2_sd <- glm(event ~ offset(log(exp_t_bad2_sd)),
+                      family = poisson,
+                      data = test_set,
+                      subset = (exp_t_bad2_sd > 0))
+
+
+fit_02_sd <- update(fit_01_sd, . ~ . + ns(PI_sd, df=3))
+fit_02_bad1_sd <- update(fit_01_bad1_sd, . ~ . + ns(PI_bad1_sd, df=3))
+fit_02_bad3_sd <- update(fit_01_bad3_sd, . ~ . + ns(PI_bad3_sd, df=3))
+fit_02_bad2_sd <- update(fit_01_bad2_sd, . ~ . + ns(PI_bad2_sd, df=3))
+
+# Plot - O/E vs PI
+
+# Original Model
+temp_sd <- termplot(fit_02_sd, term = 1, se = TRUE, plot = FALSE)[[1]]
+yy_sd <- temp_sd$y + outer(temp_sd$se, c(0, -1.96, 1.96), '*')
+graphics::matplot(temp_sd$x,
+                  exp(yy_sd),
+                  log = 'y',
+                  type = 'l',
+                  lwd = c(2 ,1 ,1),
+                  lty = c(1 ,2, 2),
+                  col = 1,
+                  xlim = c(-0.5, 2),
+                  ylim = c(0.5, 2.5),
+                  xlab = "Prognostic Index",
+                  ylab = "N of observed events / N of expected events",
+                  bty = "n",
+                  main = "Original Model")
+abline(0, 0, lty = 3)
+
+# Error Model 1
+temp_bad1_sd <- termplot(fit_02_bad1_sd, term = 1, se = TRUE, plot = FALSE)[[1]]
+yy_bad1_sd <- temp_bad1_sd$y + outer(temp_bad1_sd$se, c(0, -1.96, 1.96), '*')
+graphics::matplot(temp_bad1_sd$x,
+                  exp(yy_bad1_sd),
+                  log = 'y',
+                  type = 'l',
+                  lwd = c(2 ,1 ,1),
+                  lty = c(1 ,2, 2),
+                  col = 1,
+                  xlim = c(-0.5, 2),
+                  ylim = c(0.5, 2.5),
+                  xlab = "Prognostic Index",
+                  ylab = "N of observed events / N of expected events",
+                  bty = "n",
+                  main = "Error Model 1")
+abline(0, 0, lty = 3)
+
+# Error Model 3
+temp_bad3_sd <- termplot(fit_02_bad3_sd, term = 1, se = TRUE, plot = FALSE)[[1]]
+yy_bad3_sd <- temp_bad3_sd$y + outer(temp_bad3_sd$se, c(0, -1.96, 1.96), '*')
+graphics::matplot(temp_bad3_sd$x,
+                  exp(yy_bad3_sd),
+                  log = 'y',
+                  type = 'l',
+                  lwd = c(2 ,1 ,1),
+                  lty = c(1 ,2, 2),
+                  col = 1,
+                  xlim = c(-0.5, 2),
+                  ylim = c(0.5, 2.5),
+                  xlab = "Prognostic Index",
+                  ylab = "N of observed events / N of expected events",
+                  bty = "n",
+                  main = "Error Model 3")
+abline(0, 0, lty = 3)
+
+# Error Model 2
+temp_bad2_sd <- termplot(fit_02_bad2_sd, term = 1, se = TRUE, plot = FALSE)[[1]]
+yy_bad2_sd <- temp_bad2_sd$y + outer(temp_bad2_sd$se, c(0, -1.96, 1.96), '*')
+graphics::matplot(temp_bad2_sd$x,
+                  exp(yy_bad2_sd),
+                  log = 'y',
+                  type = 'l',
+                  lwd = c(2 ,1 ,1),
+                  lty = c(1 ,2, 2),
+                  col = 1,
+                  xlim = c(-0.5, 2),
+                  ylim = c(0.5, 2.5),
+                  xlab = "Prognostic Index",
+                  ylab = "N of observed events / N of expected events",
+                  bty = "n",
+                  main = "Error Model 2")
+abline(0, 0, lty = 3)
+
+
+
+```
+
+time range 2
+```{r}
+
+test_set$cumhaz_cox_sd <- predict(fit_cvd, newdata = test_set, type = "expected")
+test_set$lp_sd <- predict(fit_cvd, newdata = test_set, type = "lp")
+test_set$logbase_sd <- log(test_set$cumhaz_cox_sd) - test_set$lp_sd
+
+
+test_set$cumhaz_cox_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "expected") * exp(log(2))
+test_set$lp_bad1_sd <- predict(fit_cvd, newdata = test_set, type = "lp") + log(2)
+test_set$logbase_bad1_sd <- log(test_set$cumhaz_cox_bad1_sd) - test_set$lp_bad1_sd
+
+
+test_set$cumhaz_cox_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "expected")
+test_set$lp_bad3_sd <- predict(fit_cvd_bad3, newdata = test_set, type = "lp")
+test_set$logbase_bad3_sd <- log(test_set$cumhaz_cox_bad3_sd) - test_set$lp_bad3_sd
+
+test_set$cumhaz_cox_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "expected")
+test_set$lp_bad2_sd <- predict(fit_cvd_bad2, newdata = test_set, type = "lp")
+test_set$logbase_bad2_sd <- log(test_set$cumhaz_cox_bad2_sd) - test_set$lp_bad2_sd
+
+
+fit_pois_sd <- glm(event ~ lp_sd + offset(logbase_sd),
+                   family = poisson,
+                   data = test_set,
+                   subset = (test_set$cumhaz_cox_sd > 0))
+
+fit_pois_bad1_sd <- glm(event ~ lp_bad1_sd + offset(logbase_bad1_sd),
+                        family = poisson,
+                        data = test_set,
+                        subset = (test_set$cumhaz_cox_bad1_sd > 0))
+
+fit_pois_bad3_sd <- glm(event ~ lp_bad3_sd + offset(logbase_bad3_sd),
+                         family = poisson,
+                         data = test_set,
+                         subset = (test_set$cumhaz_cox_bad3_sd > 0))
+
+fit_pois_bad2_sd <- glm(event ~ lp_bad2_sd + offset(logbase_bad2_sd),
+                        family = poisson,
+                        data = test_set,
+                        subset = (test_set$cumhaz_cox_bad2_sd > 0))
+
+
+cumhaz_pois_sd <- predict(fit_pois_sd, type = "response", se.fit = TRUE)
+cumhaz_pois_bad1_sd <- predict(fit_pois_bad1_sd, type = "response", se.fit = TRUE)
+cumhaz_pois_bad3_sd <- predict(fit_pois_bad3_sd, type = "response", se.fit = TRUE)
+cumhaz_pois_bad2_sd <- predict(fit_pois_bad2_sd, type = "response", se.fit = TRUE)
+
+
+dt_cumhaz_sd <- cbind.data.frame(
+  obs_sd = test_set$cumhaz_cox_sd[test_set$cumhaz_cox_sd > 0],
+  pred_sd = cumhaz_pois_sd$fit,
+  se_sd = cumhaz_pois_sd$se.fit
+)
+
+dt_cumhaz_bad1_sd <- cbind.data.frame(
+  obs_bad1_sd = test_set$cumhaz_cox_bad1_sd[test_set$cumhaz_cox_bad1_sd > 0],
+  pred_bad1_sd = cumhaz_pois_bad1_sd$fit,
+  se_bad1_sd = cumhaz_pois_bad1_sd$se.fit
+)
+
+dt_cumhaz_bad3_sd <- cbind.data.frame(
+  obs_bad3_sd = test_set$cumhaz_cox_bad3_sd[test_set$cumhaz_cox_bad3_sd > 0],
+  pred_bad3_sd = cumhaz_pois_bad3_sd$fit,
+  se_bad3_sd = cumhaz_pois_bad3_sd$se.fit
+)
+
+dt_cumhaz_bad2_sd <- cbind.data.frame(
+  obs_bad2_sd = test_set$cumhaz_cox_bad2_sd[test_set$cumhaz_cox_bad2_sd > 0],
+  pred_bad2_sd = cumhaz_pois_bad2_sd$fit,
+  se_bad2_sd = cumhaz_pois_bad2_sd$se.fit
+)
+
+
+dt_cumhaz_sd <- dt_cumhaz_sd[order(dt_cumhaz_sd$pred_sd), ]
+dt_cumhaz_bad1_sd <- dt_cumhaz_bad1_sd[order(dt_cumhaz_bad1_sd$pred_bad1_sd), ]
+dt_cumhaz_bad3_sd <- dt_cumhaz_bad3_sd[order(dt_cumhaz_bad3_sd$pred_bad3_sd), ]
+dt_cumhaz_bad2_sd <- dt_cumhaz_bad2_sd[order(dt_cumhaz_bad2_sd$pred_bad2_sd), ]
+
+
+alpha <- 0.05
+
+add_confidence_intervals <- function(data, pred, se) {
+  alpha <- 0.05  
+  z_value <- qnorm(1 - alpha / 2)  
+  
+  data$lower <- data[[pred]] - z_value * data[[se]]
+  data$upper <- data[[pred]] + z_value * data[[se]]
+  return(data)
+}
+
+dt_cumhaz_sd <- add_confidence_intervals(dt_cumhaz_sd, "pred_sd", "se_sd")
+dt_cumhaz_bad1_sd <- add_confidence_intervals(dt_cumhaz_bad1_sd, "pred_bad1_sd", "se_bad1_sd")
+dt_cumhaz_bad3_sd <- add_confidence_intervals(dt_cumhaz_bad3_sd, "pred_bad3_sd", "se_bad3_sd")
+dt_cumhaz_bad2_sd <- add_confidence_intervals(dt_cumhaz_bad2_sd, "pred_bad2_sd", "se_bad2_sd")
+
+
+common_xlim <- c(0, max(dt_cumhaz_sd$obs_sd, dt_cumhaz_bad1_sd$obs_bad1_sd, dt_cumhaz_bad3_sd$obs_bad3_sd, dt_cumhaz_bad2_sd$obs_bad2_sd))
+common_ylim <- c(0, max(dt_cumhaz_sd$upper, dt_cumhaz_bad1_sd$upper, dt_cumhaz_bad3_sd$upper, dt_cumhaz_bad2_sd$upper))
+
+
+calculate_and_plot <- function(data, obs, pred, se, title, xlims, ylims) {
+  # Calculate confidence intervals
+  alpha <- 0.05
+  z_value <- qnorm(1 - alpha / 2)
+  
+  data$lower <- data[[pred]] - z_value * data[[se]]
+  data$upper <- data[[pred]] + z_value * data[[se]]
+  
+  # Apply loess smoothing
+  loess_fit <- loess(formula = as.formula(paste(pred, "~", obs)), data = data)
+  loess_lower <- loess(formula = as.formula(paste("lower ~", obs)), data = data)
+  loess_upper <- loess(formula = as.formula(paste("upper ~", obs)), data = data)
+  
+  # Plot calibration curve
+  plot(data[[obs]], loess_fit$fitted, type = "l", lty = 1, col = 2,
+       xlim = xlims, ylim = ylims,
+       xlab = "Cumulative hazard from Cox model",
+       ylab = "Cumulative hazard from Poisson model",
+       main = title)
+  lines(data[[obs]], loess_lower$fitted, lty = 2, col = "blue")
+  lines(data[[obs]], loess_upper$fitted, lty = 2, col = "blue")
+  abline(a = 0, b = 1, lwd = 2, col = "red")  # Ideal calibration line
+  legend("bottomright", legend = c("Calibration curve", "95% CI", "Ideal line"),
+         col = c(2, "blue", "red"), lty = c(1, 2, 1), bty = "n")
+}
+
+
+
+calculate_and_plot(dt_cumhaz_sd, "obs_sd", "pred_sd", "se_sd", "Original Model", common_xlim, common_ylim)
+calculate_and_plot(dt_cumhaz_bad1_sd, "obs_bad1_sd", "pred_bad1_sd", "se_bad1_sd", "Error Model 1", common_xlim, common_ylim)
+calculate_and_plot(dt_cumhaz_bad3_sd, "obs_bad3_sd", "pred_bad3_sd", "se_bad3_sd", "Error Model 3", common_xlim, common_ylim)
+calculate_and_plot(dt_cumhaz_bad2_sd, "obs_bad2_sd", "pred_bad2_sd", "se_bad2_sd", "Error Model 2", common_xlim, common_ylim)
+
+
+```
+
+
+
+
+
